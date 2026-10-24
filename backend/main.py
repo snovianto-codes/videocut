@@ -232,7 +232,7 @@ class GroupSettings(BaseModel):
 
 class EditReq(BaseModel):
     duration: float = 20
-    platform: str = "vertical"
+    platform: str = "reels"
     look: str = "cinematic"
     music: str | None = None
     title: str = ""
@@ -269,13 +269,30 @@ def projects():
     return list_projects()
 
 
+PICK_SCRIPT = [
+    # Run the dialog inside System Events so it comes to the front instead of opening behind other windows.
+    "-e", 'tell application "System Events"',
+    "-e", "activate",
+    "-e", 'set f to choose folder with prompt "Choose your footage folder"',
+    "-e", "end tell",
+    "-e", "POSIX path of f",
+]
+
+
 @app.post("/api/pick-folder")
 def pick_folder():
-    r = subprocess.run(["osascript", "-e", 'POSIX path of (choose folder with prompt "Choose your trip footage folder")'],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        return {"folder": None}
-    return {"folder": r.stdout.strip().rstrip("/")}
+    r = subprocess.run(["osascript", *PICK_SCRIPT], capture_output=True, text=True)
+    if r.returncode == 0 and r.stdout.strip():
+        return {"folder": r.stdout.strip().rstrip("/")}
+    err = r.stderr.strip()
+    if "-128" in err:  # the user pressed Cancel
+        return {"folder": None, "cancelled": True}
+    print(f"folder picker failed (exit {r.returncode}): {err}", flush=True)
+    if "-1743" in err or "not allowed" in err.lower():
+        msg = "macOS blocked the folder picker. Allow it in System Settings → Privacy & Security → Automation, or paste the folder path."
+    else:
+        msg = f"Couldn't open the folder picker ({err or 'no response'}). Paste the folder path instead."
+    return {"folder": None, "error": msg}
 
 
 @app.post("/api/projects/open")

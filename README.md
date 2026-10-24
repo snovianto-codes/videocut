@@ -86,7 +86,7 @@ Want to try it without your own footage? Generate a synthetic three-day, multi-c
 
 ## Using it
 
-1. **Open a trip.** Click *Choose trip folder…* (native macOS picker) or paste a path. Subfolders are scanned too, so dump every camera's card into one folder.
+1. **Open a trip.** Click *Choose folder…* (native macOS picker) or paste a path. Subfolders are scanned too, so dump every camera's card into one folder.
 2. **Review the groups.** Adjust the time-gap slider, merge groups, rename them, or switch to *Theme (Claude)*. Hover any thumbnail to scrub it; every clip shows its orientation and aspect ratio.
 3. **Make a reel.** Choose a length (10 to 60 s or custom), a destination, a look and optionally a track. Press *Make my edit*.
 4. **Iterate.** *Try another cut* reshuffles; ✕ on a storyboard shot drops that clip; the music map shows exactly where cuts and the drop land.
@@ -138,12 +138,14 @@ Only use music you have the rights to publish.
 
 | Destination | Resolution |
 |---|---|
-| Reels · TikTok · Shorts | 1080 × 1920 (9:16) |
+| Instagram Reels | 1080 × 1920 (9:16) |
+| TikTok | 1080 × 1920 (9:16) |
+| YouTube Shorts | 1080 × 1920 (9:16) |
 | Instagram feed | 1080 × 1350 (4:5) |
 | Square | 1080 × 1080 |
 | YouTube | 1920 × 1080 or 3840 × 2160 |
 
-Vertical previews can overlay the zones TikTok and Reels cover with UI.
+Vertical previews can overlay the areas each app covers with its own buttons and captions, so nothing important sits underneath.
 
 ## Configuration
 

@@ -9,12 +9,21 @@ import numpy as np
 
 from .looks import LOOKS, Look
 
+# safe: areas each app covers with its own buttons and captions, as [left, top, width, height] in % of the frame
 PLATFORMS = {
-    "vertical": {"name": "Reels · TikTok · Shorts (9:16)", "w": 1080, "h": 1920},
-    "feed": {"name": "Instagram feed (4:5)", "w": 1080, "h": 1350},
-    "square": {"name": "Square (1:1)", "w": 1080, "h": 1080},
-    "youtube": {"name": "YouTube (16:9 1080p)", "w": 1920, "h": 1080},
-    "youtube4k": {"name": "YouTube (16:9 4K)", "w": 3840, "h": 2160},
+    "reels": {"name": "Instagram Reels", "aspect": "9:16", "w": 1080, "h": 1920,
+              "safe": [[0, 0, 100, 13], [0, 80, 100, 20], [86, 45, 14, 35]]},
+    "tiktok": {"name": "TikTok", "aspect": "9:16", "w": 1080, "h": 1920,
+               "safe": [[0, 0, 100, 10], [0, 76, 100, 24], [84, 35, 16, 41]]},
+    "shorts": {"name": "YouTube Shorts", "aspect": "9:16", "w": 1080, "h": 1920,
+               "safe": [[0, 0, 100, 10], [0, 80, 100, 20], [85, 45, 15, 35]]},
+    "feed": {"name": "Instagram feed", "aspect": "4:5", "w": 1080, "h": 1350},
+    "square": {"name": "Square post", "aspect": "1:1", "w": 1080, "h": 1080},
+    "youtube": {"name": "YouTube 1080p", "aspect": "16:9", "w": 1920, "h": 1080},
+    "youtube4k": {"name": "YouTube 4K", "aspect": "16:9", "w": 3840, "h": 2160},
+    # edits made before Reels / TikTok / Shorts were split
+    "vertical": {"name": "Vertical (Reels · TikTok · Shorts)", "aspect": "9:16", "w": 1080, "h": 1920, "hidden": True,
+                 "safe": [[0, 0, 100, 13], [0, 78, 100, 22], [85, 40, 15, 38]]},
 }
 TRANSITION_DUR = {"fade": 0.5, "fadeblack": 0.7, "smoothleft": 0.3, "hblur": 0.3}
 EDGE_GUARD = 0.6
@@ -249,7 +258,7 @@ def shot_effects(look: Look, slot: dict, clip: dict, settings: dict) -> dict:
 
 def plan_edit(clips: list[dict], analyses: dict[str, dict], settings: dict, slots: list[dict] | None = None) -> dict:
     look = LOOKS[settings.get("look", "cinematic")]
-    plat = PLATFORMS[settings.get("platform", "vertical")]
+    plat = PLATFORMS[settings.get("platform", "reels")]
     target = float(settings.get("duration", 20))
     seed = int(settings.get("seed", 0))
     rng = np.random.default_rng(seed)
@@ -390,7 +399,7 @@ def plan_edit(clips: list[dict], analyses: dict[str, dict], settings: dict, slot
     return {
         "settings": settings,
         "look": look.key,
-        "platform": settings.get("platform", "vertical"),
+        "platform": settings.get("platform", "reels"),
         "width": out_w,
         "height": out_h,
         "fps": look.fps,

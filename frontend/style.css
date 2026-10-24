@@ -122,6 +122,9 @@ input[type=range] { accent-color: var(--accent); }
 .plat { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
 .plat button { display: grid; justify-items: center; gap: 6px; padding: 10px 6px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); font-size: 12px; }
 .plat button.on { border-color: var(--accent); color: var(--text); background: #2a2116; }
+.plat button { gap: 3px; }
+.plat button .shape { margin-bottom: 4px; }
+.plat .aspect { font-size: 11px; opacity: .65; }
 .plat .shape { border: 2px solid currentColor; border-radius: 3px; }
 .looks { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
 .look { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel-2); text-align: left; padding: 0; }

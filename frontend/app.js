@@ -16,8 +16,10 @@ let META = null;
 let MUSIC = [];
 let PROJECT = null;
 const JOBS = new Map();
-const DEFAULT_FORM = { duration: 20, platform: "vertical", look: "cinematic", music: "", title: "", subtitle: "", slowmo: true, hook: true, letterbox: true, ambient: 0.25, music_section: "auto", ramps: true };
+const DEFAULT_FORM = { duration: 20, platform: "reels", look: "cinematic", music: "", title: "", subtitle: "", slowmo: true, hook: true, letterbox: true, ambient: 0.25, music_section: "auto", ramps: true };
 let FORM = { ...DEFAULT_FORM, ...store.get("vc.form", store.get("tc.form", {})) };
+if (FORM.platform === "vertical") FORM.platform = "reels";
+const platLabel = (k) => { const v = META?.platforms?.[k]; return v ? `${v.name} (${v.aspect})` : k; };
 
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : {}, ...opts });
@@ -205,7 +207,7 @@ async function viewHome() {
       <h1>Dump your trip footage.<br>Get reels back.</h1>
       <p>Point VideoCut at the folder from your Sony, Fujifilm or DJI. It groups clips by day, place or theme, finds the best moments, cuts them to the beat, grades them, and reframes for Reels, TikTok, Shorts or YouTube.</p>
       <div class="open-box">
-        <button class="btn primary" id="pick">Choose trip folder…</button>
+        <button class="btn primary" id="pick">Choose folder…</button>
         <input type="text" id="path" placeholder="…or paste a folder path, e.g. ~/Movies/Bali 2026">
         <button class="btn" id="open">Open</button>
       </div>
@@ -230,9 +232,23 @@ async function viewHome() {
       location.hash = `#/p/${r.project_id}`;
     } catch (e) { toast(e.message); }
   };
-  document.getElementById("pick").onclick = async () => {
-    const r = await post("/api/pick-folder");
-    if (r.folder) openPath(r.folder);
+  document.getElementById("pick").onclick = async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = "Choose in the dialog…";
+    try {
+      const r = await post("/api/pick-folder");
+      if (r.folder) return openPath(r.folder);
+      if (r.error) {
+        toast(r.error, 8000);
+        document.getElementById("path").focus();
+      }
+    } catch (err) {
+      toast(err.message, 6000);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Choose folder…";
+    }
   };
   document.getElementById("open").onclick = () => openPath(document.getElementById("path").value.trim());
   document.getElementById("path").onkeydown = (e) => e.key === "Enter" && openPath(e.target.value.trim());
@@ -302,7 +318,7 @@ function viewProject() {
   });
   document.getElementById("all")?.addEventListener("click", async () => {
     const look = p.group_mode === "ai" ? "auto" : FORM.look;
-    if (!confirm(`Make a ${FORM.duration}s ${META.platforms[FORM.platform].name} reel for all ${p.groups.length} groups${look === "auto" ? " (each with Claude’s suggested look)" : ` in the ${META.looks.find((l) => l.key === FORM.look).name} look`}?`)) return;
+    if (!confirm(`Make a ${FORM.duration}s ${platLabel(FORM.platform)} video for all ${p.groups.length} groups${look === "auto" ? " (each with Claude’s suggested look)" : ` in the ${META.looks.find((l) => l.key === FORM.look).name} look`}?`)) return;
     const jobs = await post(`/api/projects/${p.id}/edit-all`, { ...formBody(), look });
     jobs.forEach(trackJob);
     viewProject();
@@ -397,7 +413,7 @@ function formHtml(cover) {
         <input type="number" id="len" min="5" max="180" value="${FORM.duration}" style="width:70px" aria-label="Custom length in seconds"></div>
     </div>
     <div class="field"><label>Where it’s going</label>
-      <div class="plat">${Object.entries(META.platforms).map(([k, v]) => `<button data-plat="${k}" class="${FORM.platform === k ? "on" : ""}">${shape(v.w, v.h)}${esc(v.name)}</button>`).join("")}</div>
+      <div class="plat">${Object.entries(META.platforms).filter(([, v]) => !v.hidden).map(([k, v]) => `<button data-plat="${k}" class="${FORM.platform === k ? "on" : ""}">${shape(v.w, v.h)}<span>${esc(v.name)}</span><span class="aspect">${esc(v.aspect)}</span></button>`).join("")}</div>
     </div>
     <div class="field"><label>Look</label>
       <div class="looks">${META.looks.map((l) => `<button class="look ${FORM.look === l.key ? "on" : ""}" data-look="${l.key}" title="${esc(l.blurb)}">
@@ -528,6 +544,12 @@ function musicMap(e) {
   </div>`;
 }
 
+function safeZones(platform) {
+  const zones = META.platforms[platform]?.safe;
+  if (!zones) return "";
+  return `<div class="safe">${zones.map(([l, t, w, h]) => `<div style="left:${l}%;top:${t}%;width:${w}%;height:${h}%"></div>`).join("")}</div>`;
+}
+
 function editCard(e) {
   const plan = e.plan;
   const look = META.looks.find((l) => l.key === plan.look)?.name || plan.look;
@@ -537,10 +559,10 @@ function editCard(e) {
   return `<div class="edit" data-eid="${e.id}">
     <div class="player" style="width:${w}px;max-width:100%">
       <video src="${src}" poster="/media/${PROJECT.id}/renders/${e.id}/${e.thumbs[0] || ""}" controls playsinline preload="metadata" style="width:100%"></video>
-      ${vertical ? `<div class="safe"><div style="left:0;right:0;top:0;height:12%"></div><div style="left:0;right:0;bottom:0;height:22%"></div><div style="right:0;top:40%;bottom:22%;width:16%"></div></div>` : ""}
+      ${safeZones(plan.platform)}
     </div>
     <div class="edit-info">
-      <div><b>${esc(look)}</b> · ${esc(META.platforms[plan.platform]?.name || plan.platform)} · ${plan.duration.toFixed(1)}s · ${plan.shots.length} shots · ${plan.fps} fps</div>
+      <div><b>${esc(look)}</b> · ${esc(platLabel(plan.platform))} · ${plan.duration.toFixed(1)}s · ${plan.shots.length} shots · ${plan.fps} fps</div>
       <div class="muted small">${e.music ? `♪ ${esc(e.music.path.split("/").pop())} · ${e.music.tempo} BPM` : "Natural sound"} · made ${fmtTime(e.created)}</div>
       ${musicMap(e)}
       <div class="storyboard">${plan.shots.map((s, i) => `
@@ -554,7 +576,7 @@ function editCard(e) {
       <div class="row">
         ${e.final ? `<button class="btn primary small" data-reveal="${esc(e.final)}">Show in Finder</button>` : `<button class="btn primary small" data-final>Export full quality</button>`}
         <button class="btn small" data-again>Try another cut</button>
-        ${vertical ? `<label class="check small"><input type="checkbox" data-safe> Show app overlay zones</label>` : ""}
+        ${META.platforms[plan.platform]?.safe ? `<label class="check small"><input type="checkbox" data-safe> Show where ${esc(META.platforms[plan.platform].hidden ? "the app" : META.platforms[plan.platform].name)} covers the video</label>` : ""}
         <span class="spacer"></span>
         <button class="btn small ghost" data-del>Delete</button>
       </div>
