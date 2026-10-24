@@ -13,6 +13,7 @@ from . import control
 from .config import FFMPEG, FONT_FALLBACK, FONT_TITLE
 from .looks import LOOKS, lut_path
 from .media import rotate_filter
+from .text import FADE, overlays
 
 
 def _even(x: float) -> int:
@@ -21,6 +22,15 @@ def _even(x: float) -> int:
 
 def _esc(path: Path | str) -> str:
     return str(path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+
+XFADE = {"dissolve": "fade", "dip": "fadeblack", "zoom": "zoomin", "flash": "fadewhite", "leak": "fade", "graydip": "fadegrays"}
+
+
+def xfade_name(tr: dict) -> str:
+    if tr["type"] == "whip":
+        return f"smooth{tr.get('dir', 'left')}"
+    return XFADE.get(tr["type"], tr["type"])  # older edits stored ffmpeg's own names
 
 
 def run(cmd: list[str]):
@@ -79,6 +89,10 @@ def shot_video_filter(shot: dict, clip: dict, W: int, H: int, fps: int, look_key
         parts.append(f"split[g0][g1];[g1]gblur=sigma={sigma}[gb];[g0][gb]blend=all_mode=screen:all_opacity={look.glow}")
     if look.vignette:
         parts.append(f"vignette=angle={0.25 + look.vignette:.3f}")
+    for key, when in (("blur_in", "lte(t,{d})"), ("blur_out", "gte(t,{T}-{d})")):
+        if blur := shot.get(key):  # motion blur either side of a whip pan, in the whip's direction
+            angle = 0 if blur["dir"] in ("left", "right") else 90
+            parts.append(f"dblur=angle={angle}:radius={max(8, W // 28)}:enable='{when.format(d=blur['dur'], T=T)}'")
     parts.append("scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,setsar=1")
     if shot.get("flash"):
         parts.append("fade=t=in:st=0:d=0.2:color=white")
@@ -167,11 +181,21 @@ def assemble(plan: dict, seg_paths: list[Path], W: int, H: int, out: Path, quali
             acc_len += shots[k]["out_len"]
         else:
             off = max(0.0, acc_len - d)
-            fc.append(f"[{vacc}][v{k}]xfade=transition={tr}:duration={d:.3f}:offset={off:.3f}[{vo}]")
+            fc.append(f"[{vacc}][v{k}]xfade=transition={xfade_name(shots[k]['transition_in'])}:duration={d:.3f}:offset={off:.3f}[{vo}]")
             fc.append(f"[{aacc}][a{k}]acrossfade=d={d:.3f}:c1=tri:c2=tri[{ao}]")
             acc_len += shots[k]["out_len"] - d
         vacc, aacc = vo, ao
 
+    n_in = len(seg_paths)
+    leaks = [(s["timeline"][0], s["transition_in"]["dur"]) for s in shots[1:] if s["transition_in"]["type"] == "leak"]
+    if leaks:  # a warm light leak washes across these dissolves (screen blend)
+        inputs += ["-f", "lavfi", "-i", f"gradients=s={W}x{H}:r={fps}:d={total + 1:.2f}:c0=0xffd9a0:c1=0xff7a1f:"
+                   f"c2=0x000000:nb_colors=3:type=radial:speed=0.02:x0={int(W * 0.96)}:y0={int(H * 0.25)}:x1=0:y1={int(H * 0.94)}"]
+        env = "+".join(f"max(0,1-abs(T-{c:.3f})/{d / 2 + 0.2:.3f})" for c, d in leaks)
+        fc.append(f"[{vacc}]format=gbrp[lka];[{n_in}:v]format=gbrp[lkb];"
+                  f"[lka][lkb]blend=all_expr='A+(255-A)*B/255*min(1,{env})*0.75',format=yuv420p[vleak]")
+        vacc = "vleak"
+        n_in += 1
     vchain = [f"trim=duration={total:.3f}", "setpts=PTS-STARTPTS"]
     if look.letterbox and plan["settings"].get("letterbox", True) and W / H >= 1.5:
         bar = _even((H - W / 2.39) / 2)
@@ -185,7 +209,6 @@ def assemble(plan: dict, seg_paths: list[Path], W: int, H: int, out: Path, quali
     vlast = "vbase"
 
     title = (plan["settings"].get("title") or "").strip()
-    n_in = len(seg_paths)
     if title:
         png = workdir / "title.png"
         title_png(title, plan["settings"].get("subtitle", ""), W, H, png)
@@ -193,6 +216,15 @@ def assemble(plan: dict, seg_paths: list[Path], W: int, H: int, out: Path, quali
         fc.append(f"[{n_in}:v]format=rgba,fade=t=in:st=0.3:d=0.7:alpha=1,fade=t=out:st=2.7:d=0.8:alpha=1[ttl]")
         fc.append(f"[{vlast}][ttl]overlay=0:0:eof_action=pass:format=auto[vt]")
         vlast = "vt"
+        n_in += 1
+
+    for k, (png, start, end) in enumerate(overlays(plan, W, H, workdir)):
+        dur = end - start
+        inputs += ["-loop", "1", "-t", f"{dur + 0.1:.3f}", "-i", str(png)]
+        fc.append(f"[{n_in}:v]format=rgba,fade=t=in:st=0:d={FADE}:alpha=1,"
+                  f"fade=t=out:st={max(0.0, dur - FADE):.3f}:d={FADE}:alpha=1,setpts=PTS-STARTPTS+{start:.3f}/TB[tx{k}]")
+        fc.append(f"[{vlast}][tx{k}]overlay=0:0:eof_action=pass:format=auto[vtx{k}]")
+        vlast = f"vtx{k}"
         n_in += 1
 
     ambient = float(plan["settings"].get("ambient", 0.25 if music else 1.0))
@@ -257,6 +289,28 @@ def render_plan(plan: dict, clips: dict[str, dict], out: Path, workdir: Path, qu
     if progress:
         progress(1.0, "Done")
     return {"file": out.name, "width": W, "height": H, "thumbs": thumbs}
+
+
+def moment_strip(clip: dict, times: list[float], out: Path, w: int = 256) -> Path | None:
+    """Graded frames at the given clip times, side by side (for rating moments)."""
+    lut = lut_path(clip["profile"], None, 0.0)
+    h = _even(w * clip["height"] / clip["width"])
+    frames = []
+    for k, t in enumerate(times):
+        tmp = out.parent / f".{clip['id']}_m{k}.jpg"
+        vf = (f"{rotate_filter(clip.get('rotate_fix', 0))}scale={w}:{h}:{color_in(clip.get('color_space', ''), clip.get('color_range', 'tv'))},"
+              f"format=gbrp16le,lut3d=file='{_esc(lut)}',format=yuvj420p")
+        control.run([FFMPEG, "-y", "-v", "error", "-ss", f"{t:.2f}", "-i", clip["path"], "-frames:v", "1", "-vf", vf, "-q:v", "4", str(tmp)])
+        if tmp.exists():
+            frames.append(Image.open(tmp).convert("RGB"))
+            tmp.unlink()
+    if not frames:
+        return None
+    strip = Image.new("RGB", (w * len(frames) + 8 * (len(frames) - 1), h), (0, 0, 0))
+    for k, f in enumerate(frames):
+        strip.paste(f, (k * (w + 8), 0))
+    strip.save(out, quality=80)
+    return out
 
 
 def clip_frames(clip: dict, out_sprite: Path, out_thumb: Path, sheet: Path | None = None, n: int = 4):

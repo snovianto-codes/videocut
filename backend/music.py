@@ -258,8 +258,8 @@ def plan_slots(info: dict, excerpt: dict, pace: tuple[float, float], energetic: 
     grid.append(end)
     grid = np.asarray(grid)
     e_grid = np.interp(grid, bt, be) if len(bt) else np.full(len(grid), 0.5)
-    downs = set(np.round(np.asarray(info["bars"]), 3))
-    is_down = np.array([round(float(t), 3) in downs for t in grid])
+    bars_arr = np.asarray(info["bars"]) if info["bars"] else np.asarray([-1e9])
+    is_down = np.min(np.abs(bars_arr[None, :] - np.asarray(grid)[:, None]), axis=1) < 0.02  # within 20 ms of a bar line
     drops = [d["t"] for d in info["drops"] if start - 1e-3 <= d["t"] < end - period]
     sec_starts = [s["start"] for s in info["sections"] if start + period < s["start"] < end - period]
 
@@ -288,9 +288,10 @@ def plan_slots(info: dict, excerpt: dict, pace: tuple[float, float], energetic: 
         f = [i for i in forced if p < i < nxt]
         if f:
             nxt = f[0]
+        bar_no = int(is_down[:p + 1].sum()) - 1 if is_down[p] else -1
         slots.append({"t0": float(grid[p] - start), "t1": float(grid[nxt] - start), "energy": round(e, 3),
                       "drop": p in drop_idx, "section_start": p in forced and p not in drop_idx,
-                      "pre_drop": nxt in drop_idx})
+                      "pre_drop": nxt in drop_idx, "phrase": bool(p > 0 and bar_no >= 0 and bar_no % 4 == 0)})
         p = nxt
     while len(slots) > 1 and slots[-1]["t1"] - slots[-1]["t0"] < max(0.6, lo * 0.5):
         tail = slots.pop()

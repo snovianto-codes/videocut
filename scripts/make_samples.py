@@ -145,13 +145,15 @@ def make_clip(root: Path, spec, rng, work: Path):
     y = f"({BH - ch})/2+{sy}"
     cube = work / f"enc_{profile}.cube"
     encode_cube(profile, cube)
-    subj = "drawbox=x='iw*0.2+iw*0.5*t/{d}':y='ih*0.62+10*sin(t*6)':w=iw*0.035:h=ih*0.09:color=0xC04020@1:t=fill".format(d=dur)
-    vf = (f"crop={cw}:{ch}:x='{x}':y='{y}',scale={ow}:{oh},{subj},noise=alls=5:allf=t,"
+    # a small subject walking across the frame (overlay, because drawbox ignores t in its position)
+    walk = f"overlay=x='W*0.2+W*0.5*t/{dur}':y='H*0.62+10*sin(t*6)':shortest=1"
+    vf = (f"crop={cw}:{ch}:x='{x}':y='{y}',scale={ow}:{oh}[bg];[bg][3:v]{walk},noise=alls=5:allf=t,"
           f"eq=brightness={(expo - 1) * 0.4:.3f},lut3d=file={cube},format=yuv420p")
     tags = ["-metadata", f"creation_time={when.split('+')[0]}Z" if "+" in when else f"creation_time={when}Z"]
     cmd = [FFMPEG, "-y", "-v", "error", "-loop", "1", "-framerate", str(fps), "-i", str(still),
            "-f", "lavfi", "-i", f"anoisesrc=d={dur}:c=pink:a=0.03,lowpass=f=1500",
            "-f", "lavfi", "-i", f"sine=f=660:d={dur},volume='if(between(mod(t,4),2,2.25),0.25,0)':eval=frame",
+           "-f", "lavfi", "-i", f"color=c=0xC04020:s={int(ow * 0.035)}x{int(oh * 0.09)}:r={fps}",
            "-filter_complex", f"[0:v]{vf}[v];[1:a][2:a]amix=inputs=2,aformat=channel_layouts=stereo[a]",
            "-map", "[v]", "-map", "[a]", "-t", str(dur), "-r", str(fps),
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", *tags, str(out)]

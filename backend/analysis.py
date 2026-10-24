@@ -14,9 +14,11 @@ from .looks import LUMA, auto_exposure, to_display
 
 ANALYSIS_DIR = DATA_DIR / "analysis"
 ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
-VERSION = 4
+VERSION = 6
 BINS = 24
 _face = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+_smile = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_smile.xml")
+ACTION_FPS = 12
 
 
 def cache_path(clip: dict) -> Path:
@@ -83,7 +85,7 @@ def analyze_clip(clip: dict, force: bool = False) -> dict:
     f32 = frames.astype(np.float32) / 255.0
     ev = auto_exposure([f32[i] for i in np.linspace(0, n - 1, min(n, 6)).astype(int)], profile) if n else 0.0
 
-    out = {k: [] for k in ("t", "sharp", "bright", "clip_hi", "clip_lo", "color", "motion", "dx", "dy", "faces", "face_x", "face_y", "audio", "colx", "coly", "sig")}
+    out = {k: [] for k in ("t", "sharp", "bright", "clip_hi", "clip_lo", "color", "motion", "dx", "dy", "faces", "face_x", "face_y", "audio", "colx", "coly", "sig", "act", "smile", "flat")}
     prev_gray = None
     for i in range(n):
         disp = to_display(f32[i], profile, ev)
@@ -96,6 +98,8 @@ def analyze_clip(clip: dict, force: bool = False) -> dict:
         out["clip_hi"].append(float((luma > 0.97).mean()))
         out["clip_lo"].append(float((luma < 0.03).mean()))
         out["color"].append(colorfulness(disp))
+        # nearly featureless frame: the ground, a pocket, a lens cap
+        out["flat"].append(int(grayf.std() < 0.05 and out["sharp"][-1] < 25))
         edges = np.abs(cv2.Sobel(grayf, cv2.CV_32F, 1, 0)) + np.abs(cv2.Sobel(grayf, cv2.CV_32F, 0, 1))
         if prev_gray is not None:
             (dx, dy), _ = cv2.phaseCorrelate(prev_gray.astype(np.float64), grayf.astype(np.float64))
@@ -105,11 +109,14 @@ def analyze_clip(clip: dict, force: bool = False) -> dict:
             out["motion"].append(float(diff.mean()))
             out["dx"].append(float(dx) / w)
             out["dy"].append(float(dy) / w)
-            energy = edges * 0.3 + np.maximum(resid - np.percentile(resid, 75), 0) * 12.0
+            moving = np.maximum(resid - np.percentile(resid, 75), 0)
+            out["act"].append(round(moving_share(resid), 5))  # subject movement with the camera's own motion removed
+            energy = edges * 0.3 + moving * 12.0
         else:
             out["motion"].append(0.0)
             out["dx"].append(0.0)
             out["dy"].append(0.0)
+            out["act"].append(0.0)
             energy = edges * 0.3
         faces = []
         if i % 2 == 0:
@@ -120,9 +127,11 @@ def analyze_clip(clip: dict, force: bool = False) -> dict:
             out["face_x"].append(round(float((big[0] + big[2] / 2) / w), 3))
             out["face_y"].append(round(float((big[1] + big[3] / 2) / h), 3))
             fx, fy = int(big[0] + big[2] / 2), int(big[1] + big[3] / 2)
+            out["smile"].append(int(_smiling(gray8, big)))
             energy[max(0, fy - big[3]):fy + big[3], max(0, fx - big[2]):fx + big[2]] += 3.0
         else:
             out["faces"].append(0)
+            out["smile"].append(0)
             out["face_x"].append(None)
             out["face_y"].append(None)
         col = energy.sum(axis=0)
@@ -150,6 +159,60 @@ def analyze_clip(clip: dict, force: bool = False) -> dict:
     tmp.write_text(json.dumps(result))
     tmp.rename(cache_path(clip))
     return result
+
+
+def moving_share(resid: np.ndarray) -> float:
+    """Share of the frame that really changed: the threshold follows the frame's own noise, so grain counts as nothing."""
+    thr = max(0.06, 4 * float(np.median(resid)))
+    return float((resid > thr).mean())
+
+
+def _smiling(gray8: np.ndarray, face) -> bool:
+    x, y, fw, fh = face
+    mouth = gray8[y + fh // 2:y + fh, x:x + fw]
+    if mouth.size == 0:
+        return False
+    mouth = cv2.resize(mouth, (96, max(24, int(96 * mouth.shape[0] / max(1, mouth.shape[1])))))
+    return len(_smile.detectMultiScale(mouth, scaleFactor=1.6, minNeighbors=18, minSize=(25, 12))) > 0
+
+
+def refine_action(clip: dict, t0: float, t1: float) -> tuple[float, float] | None:
+    """Pin an action peak down to ~1/12 s inside [t0, t1]: subject movement plus sudden sound."""
+    t0, t1 = max(0.0, t0), min(clip["duration"], t1)
+    if t1 - t0 < 0.4:
+        return None
+    aspect = clip["width"] / max(1, clip["height"])
+    w = 160 if aspect >= 1 else 96
+    h = int(round(w / aspect / 2) * 2)
+    cmd = [FFMPEG, "-v", "error", "-ss", f"{t0:.3f}", "-t", f"{t1 - t0:.3f}", "-i", clip.get("proxy") or clip["path"], "-an",
+           "-vf", f"{rotate_filter(clip.get('rotate_fix', 0))}fps={ACTION_FPS},scale={w}:{h}:flags=area",
+           "-f", "rawvideo", "-pix_fmt", "gray", "-"]
+    raw = np.frombuffer(control.run(cmd).stdout, dtype=np.uint8)
+    n = raw.size // (w * h)
+    if n < 4:
+        return None
+    frames = raw[: n * w * h].reshape(n, h, w).astype(np.float32) / 255
+    act = [0.0]
+    for a, b in zip(frames, frames[1:]):
+        (dx, dy), _ = cv2.phaseCorrelate(a.astype(np.float64), b.astype(np.float64))
+        shifted = cv2.warpAffine(a, np.float32([[1, 0, dx], [0, 1, dy]]), (w, h), borderMode=cv2.BORDER_REPLICATE)
+        act.append(moving_share(cv2.GaussianBlur(np.abs(b - shifted), (3, 3), 0)))
+    act = np.convolve(np.asarray(act), np.ones(3) / 3, mode="same")
+    curve = act / (np.median(act) + 0.002)
+    if clip.get("has_audio"):
+        r = control.run([FFMPEG, "-v", "error", "-ss", f"{t0:.3f}", "-t", f"{t1 - t0:.3f}", "-i", clip["path"], "-vn",
+                         "-ac", "1", "-ar", "8000", "-f", "s16le", "-"])
+        pcm = np.frombuffer(r.stdout, dtype=np.int16).astype(np.float32) / 32768
+        hop = 8000 // ACTION_FPS
+        m = min(n, pcm.size // hop)
+        if m > 2:
+            rms = np.sqrt((pcm[: m * hop].reshape(m, hop) ** 2).mean(axis=1) + 1e-9)
+            jump = np.maximum(np.diff(20 * np.log10(rms), prepend=20 * np.log10(rms[0])), 0)
+            curve[:m] += jump / 6  # a sudden ~6 dB jump counts like doubling the movement
+    i = int(np.argmax(curve))
+    if curve[i] < 2.5:
+        return None
+    return t0 + i / ACTION_FPS, round(float(curve[i]), 2)
 
 
 def _bin(v: np.ndarray, bins: int) -> np.ndarray:

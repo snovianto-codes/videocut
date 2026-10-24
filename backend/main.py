@@ -9,13 +9,13 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai, analysis, director, grouping, media, render
-from . import control
+from . import ai, analysis, caption, control, director, grouping, media, render
 from . import music as music_mod
 from .config import EXPORT_DIR, MUSIC_DIR, ROOT
 from .looks import LOOKS, PROFILES, looks_catalog
@@ -55,12 +55,31 @@ def make_thumbs(p: Project, clip: dict, force: bool = False):
         render.clip_frames(clip, sprite, thumb, sheet)
 
 
-def regroup(p: Project):
+def regroup(p: Project, keep_merged: bool = True):
+    """Group by day / gap / place, keeping groups the user merged and names they gave."""
     s = p.data.get("settings", {})
     clips = [c for c in p.clips.values() if not c.get("excluded")]
-    groups = grouping.group_by_moment(clips, float(s.get("gap_hours", 3)), float(s.get("km", 10)))
+    old = p.data.get("groups", [])
+    titles = {g["id"]: g["title"] for g in old if g.get("renamed")}
+    kept = []
+    if keep_merged:
+        first = grouping.trip_first_day(clips) if clips else None
+        live = {c["id"]: c for c in clips}
+        for g in old:
+            members = [live[i] for i in g["clip_ids"] if i in live]
+            if g.get("kind") == "merged" and members:
+                ng = grouping.summarize(members, first, title=g["title"], kind="merged")
+                ng.update(id=g["id"], cover=g.get("cover") if g.get("cover") in live else members[0]["id"],
+                          renamed=g.get("renamed", False))
+                kept.append(ng)
+    taken = {i for g in kept for i in g["clip_ids"]}
+    groups = grouping.group_by_moment([c for c in clips if c["id"] not in taken], float(s.get("gap_hours", 3)),
+                                      float(s.get("km", 10)))
     for g in groups:
         g["cover"] = g["clip_ids"][len(g["clip_ids"]) // 2]
+        if g["id"] in titles:
+            g.update(title=titles[g["id"]], renamed=True)
+    groups = sorted(groups + kept, key=lambda g: g["start"])
     p.update(lambda d: d.__setitem__("groups", groups))
 
 
@@ -79,7 +98,7 @@ def scan(p: Project, progress):
     def probe(v: Path):
         c = media.probe_clip(v, exif.get(str(v.resolve()), {}))
         if c and (prev := old.get(c["path"])) and prev["id"] == c["id"]:
-            for keep in ("profile_override", "excluded", "tags"):
+            for keep in ("profile_override", "excluded", "tags", "starred", "smart"):
                 if keep in prev:
                     c[keep] = prev[keep]
             if prev.get("profile_override"):
@@ -134,8 +153,15 @@ def make_edit(p: Project, gid: str, settings: dict, progress):
             excerpt = music_mod.pick_excerpt(info, float(settings["duration"]), settings.get("music_section", "auto"))
             slots, music_map = music_mod.plan_slots(info, excerpt, look.pace, look.energetic)
             music_info = {"path": str(mpath), "offset": excerpt["start"], "tempo": round(info["tempo"]), "map": music_map}
+    notes: list[str] = []
+    if settings.get("smart_picks"):
+        notes += smart_picks(p, clips, analyses, progress)
+        clips = [p.clips[c["id"]] for c in clips]
     progress(0.48, "Choosing the best moments")
-    plan = director.plan_edit(clips, analyses, settings, slots)
+    mm = music_info["map"] if music_info else {}
+    plan = director.plan_edit(clips, analyses, settings, slots, beats=mm.get("beats"), bars=mm.get("bars"),
+                              refine=analysis.refine_action)
+    plan["text"] = {"place": (settings.get("place") or "").strip(), "show_date": bool(settings.get("show_date")), "notes": {}}
     eid = uuid.uuid4().hex[:8]
     out_dir = p.renders / eid
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -146,7 +172,7 @@ def make_edit(p: Project, gid: str, settings: dict, progress):
         shutil.rmtree(out_dir, ignore_errors=True)
         raise
     rec = {"id": eid, "group_id": gid, "created": datetime.now().isoformat(timespec="seconds"), "settings": settings,
-           "plan": plan, "music": music_info,
+           "plan": plan, "music": music_info, "notes": notes,
            "preview": res["file"], "thumbs": res["thumbs"], "final": None}
 
     def save(d):
@@ -158,6 +184,63 @@ def make_edit(p: Project, gid: str, settings: dict, progress):
 
     p.update(save)
     return {"edit_id": eid, "group_id": gid}
+
+
+def smart_picks(p: Project, clips: list[dict], analyses: dict[str, dict], progress) -> list[str]:
+    """Have Claude rate each clip's best moments once; failures only skip the feature."""
+    todo = [c for c in clips if not (c.get("smart") or {}).get("version")]
+    if not todo:
+        return []
+    if not ai.available():
+        return ["Smart picks skipped: no Claude API key is set."]
+    sc = director.score_samples(clips, analyses)
+    strips = {}
+    for c in todo:
+        an, s = analyses[c["id"]], sc[c["id"]]["score"]
+        order = [int(i) for i in np.argsort(-s)]
+        times: list[float] = []
+        for i in order:  # three good moments, at least 1.5 s apart
+            t = an["t"][i]
+            if all(abs(t - u) > 1.5 for u in times):
+                times.append(t)
+            if len(times) == 3:
+                break
+        strips[c["id"]] = render.moment_strip(c, sorted(times), p.thumbs / f"{c['id']}_moments.jpg")
+    progress(0.47, f"Claude is rating {len(todo)} clips")
+    try:
+        ratings = ai.rate_moments(todo, lambda c: strips.get(c["id"]))
+    except Exception as e:
+        return [f"Smart picks skipped: {str(e)[:160]}"]
+
+    def save(d):
+        for cid, r in ratings.items():
+            if cid in d["clips"]:
+                d["clips"][cid]["smart"] = r
+    p.update(save)
+    return []
+
+
+def music_for(e: dict) -> dict | None:
+    """An edit's soundtrack, found by file name so edits survive the project folder moving."""
+    m = e.get("music")
+    return dict(m, path=str(MUSIC_DIR / Path(m["path"]).name)) if m else None
+
+
+def rerender_preview(p: Project, eid: str, progress):
+    """Re-render an edit's preview with its existing plan (used after changing on-screen text)."""
+    e = find_edit(p, eid)
+    out_dir = p.renders / eid
+    name = f"preview-{datetime.now().strftime('%H%M%S')}.mp4"
+    clips = {c["id"]: c for c in p.clips.values()}
+    res = render.render_plan(e["plan"], clips, out_dir / name, out_dir / "work", "preview", music_for(e), progress)
+    old = [e["preview"], *e.get("thumbs", [])]
+
+    def save(d):
+        e.update(preview=res["file"], thumbs=res["thumbs"], final=None)
+    p.update(save)
+    for f in old:
+        (out_dir / f).unlink(missing_ok=True)
+    return {"edit_id": eid}
 
 
 def find_edit(p: Project, eid: str) -> dict:
@@ -182,7 +265,7 @@ def export_final(p: Project, eid: str, progress):
         n += 1
     clips = {c["id"]: c for c in p.clips.values()}
     try:
-        music = dict(e["music"], path=str(MUSIC_DIR / Path(e["music"]["path"]).name)) if e.get("music") else None
+        music = music_for(e)
         render.render_plan(plan, clips, dest, p.renders / eid / "final_work", "final", music, progress)
     except BaseException:
         dest.unlink(missing_ok=True)
@@ -246,6 +329,9 @@ class EditReq(BaseModel):
     ambient: float | None = None
     ev_bias: float = 0.0
     exclude_clips: list[str] = []
+    place: str = ""
+    show_date: bool = False
+    smart_picks: bool = False
 
 
 def ui_version() -> str:
@@ -327,7 +413,7 @@ def project(pid: str):
 def do_regroup(pid: str, s: GroupSettings):
     p = need_project(pid)
     p.update(lambda d: d.update({"settings": {**d.get("settings", {}), **s.model_dump()}, "group_mode": "moment"}))
-    regroup(p)
+    regroup(p, keep_merged=False)  # the user asked for a fresh split; names of unchanged groups survive
     return {"groups": len(p.data["groups"])}
 
 
@@ -360,6 +446,7 @@ def rename_group(pid: str, gid: str, body: GroupPatch):
         for g in d.get("groups", []) + d.get("ai_groups", []):
             if g["id"] == gid:
                 g["title"] = body.title.strip()[:80] or g["title"]
+                g["renamed"] = True
     p.update(ren)
     return {"ok": True}
 
@@ -391,6 +478,7 @@ class ClipPatch(BaseModel):
     profile: str | None = None
     excluded: bool | None = None
     rotate: int | None = None  # degrees clockwise to add: 90, 180 or -90
+    starred: bool | None = None
 
 
 @app.patch("/api/projects/{pid}/clips/{cid}")
@@ -407,6 +495,8 @@ def patch_clip(pid: str, cid: str, body: ClipPatch):
             c["profile"] = c["profile_override"] = body.profile
         if body.excluded is not None:
             c["excluded"] = body.excluded
+        if body.starred is not None:
+            c["starred"] = body.starred
         if body.rotate:
             media.set_rotate_fix(c, c.get("rotate_fix", 0) + body.rotate)
     if body.rotate is not None and body.rotate % 90:
@@ -453,6 +543,40 @@ def start_final(pid: str, eid: str):
     p = need_project(pid)
     find_edit(p, eid)
     return jobs.start("final", lambda pr: export_final(p, eid, pr), project_id=pid, edit_id=eid)
+
+
+class TextReq(BaseModel):
+    place: str = ""
+    show_date: bool = False
+    notes: dict[str, str] = {}
+
+
+@app.post("/api/projects/{pid}/edits/{eid}/text")
+def set_text(pid: str, eid: str, body: TextReq):
+    p = need_project(pid)
+    e = find_edit(p, eid)
+    n = len(e["plan"]["shots"])
+    notes = {k: v.strip()[:120] for k, v in body.notes.items() if k.isdigit() and int(k) < n and v.strip()}
+
+    def save(d):
+        e["plan"]["text"] = {"place": body.place.strip()[:40], "show_date": body.show_date, "notes": notes}
+        e["settings"].update(place=body.place.strip()[:40], show_date=body.show_date)
+    p.update(save)
+    return jobs.start("text", lambda pr: rerender_preview(p, eid, pr), project_id=pid, group_id=e["group_id"], edit_id=eid)
+
+
+class CaptionReq(BaseModel):
+    use_ai: bool = True
+
+
+@app.post("/api/projects/{pid}/edits/{eid}/caption")
+def post_caption(pid: str, eid: str, body: CaptionReq):
+    p = need_project(pid)
+    e = find_edit(p, eid)
+    group = p.group(e["group_id"]) or {}
+    out = caption.write(e["plan"], group, p.clips, body.use_ai)
+    p.update(lambda d: e.__setitem__("post_caption", out))
+    return out
 
 
 @app.delete("/api/projects/{pid}/edits/{eid}")

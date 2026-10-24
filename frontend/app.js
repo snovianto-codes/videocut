@@ -16,7 +16,7 @@ let META = null;
 let MUSIC = [];
 let PROJECT = null;
 const JOBS = new Map();
-const DEFAULT_FORM = { duration: 20, platform: "reels", look: "cinematic", music: "", title: "", subtitle: "", slowmo: true, hook: true, letterbox: true, ambient: 0.25, music_section: "auto", ramps: true };
+const DEFAULT_FORM = { duration: 20, platform: "reels", look: "cinematic", music: "", title: "", subtitle: "", slowmo: true, hook: true, letterbox: true, ambient: 0.25, music_section: "auto", ramps: true, place: "", show_date: true };
 let FORM = { ...DEFAULT_FORM, ...store.get("vc.form", store.get("tc.form", {})) };
 if (FORM.platform === "vertical") FORM.platform = "reels";
 const platLabel = (k) => { const v = META?.platforms?.[k]; return v ? `${v.name} (${v.aspect})` : k; };
@@ -93,7 +93,7 @@ function renderJobsPill() {
     $jobsPill.textContent = `${active.length > 1 ? active.length + " jobs · " : ""}${j.status === "paused" ? "Paused" : j.message} · ${Math.round(j.progress * 100)}%${paused && j.status !== "paused" ? ` · ${paused} paused` : ""}`;
   }
 }
-const JOB_LABEL = { scan: "Scanning footage", edit: "Making your edit", final: "Exporting full quality", ai: "Claude is watching your clips" };
+const JOB_LABEL = { scan: "Scanning footage", edit: "Making your edit", final: "Exporting full quality", ai: "Claude is watching your clips", text: "Updating the text on your video" };
 function jobButtons(j) {
   if (j.status === "cancelling") return `<span class="muted small">Stopping…</span>`;
   if (!isActive(j)) return "";
@@ -433,6 +433,11 @@ function formHtml(cover) {
       <label class="slider">Camera sound <input type="range" id="ambient" min="0" max="1" step="0.05" value="${FORM.ambient}"></label>` : ""}
       <div class="hint">${FORM.music ? "Cuts follow the bars and energy of the song and land exactly on the drop." : "Pick a track and the edit is cut to its beats, sections and drop."} Use music you have the rights to post.</div>
     </div>
+    <div class="field"><label>Text on video</label>
+      <input type="text" id="place" placeholder="Place, e.g. Lisbon (shown when each day starts)" value="${esc(FORM.place || "")}">
+      <label class="check"><input type="checkbox" id="show_date" ${FORM.show_date !== false ? "checked" : ""}> Show the date with it</label>
+      <div class="hint">Add notes to individual shots after the edit is made, under <b>Text &amp; caption</b>.</div>
+    </div>
     <div class="field"><label>Title card</label>
       <input type="text" id="title" placeholder="e.g. BALI (leave empty for none)" value="${esc(FORM.title)}">
       <input type="text" id="subtitle" placeholder="Subtitle, e.g. September 2026" value="${esc(FORM.subtitle)}">
@@ -441,6 +446,8 @@ function formHtml(cover) {
       <label class="check"><input type="checkbox" id="hook" ${FORM.hook ? "checked" : ""}> Open with the most eye-catching shot</label>
       <label class="check"><input type="checkbox" id="slowmo" ${FORM.slowmo ? "checked" : ""}> Slow-motion for 50/60/120 fps clips</label>
       <label class="check"><input type="checkbox" id="letterbox" ${FORM.letterbox ? "checked" : ""}> Widescreen bars (16:9 cinematic)</label>
+      <label class="check"><input type="checkbox" id="smart_picks" ${FORM.smart_picks ? "checked" : ""}> Smart picks with Claude</label>
+      <div class="hint">Claude rates what each clip's best moments show (people, food, views vs. walls and transit). Each clip is rated once; about 1–2¢ per clip. Needs a working API key.</div>
     </div>
     <button class="btn primary" id="go" style="width:100%;justify-content:center;padding:12px">Make my edit</button>`;
 }
@@ -456,8 +463,9 @@ function bindForm(g, cover) {
   document.getElementById("ambient")?.addEventListener("input", (e) => { FORM.ambient = +e.target.value; save(); });
   document.getElementById("ramps")?.addEventListener("change", (e) => { FORM.ramps = e.target.checked; save(); });
   document.querySelectorAll("[data-section]").forEach((b) => (b.onclick = () => { FORM.music_section = b.dataset.section; save(); rerender(); }));
-  ["title", "subtitle"].forEach((k) => (document.getElementById(k).oninput = (e) => { FORM[k] = e.target.value; save(); }));
-  ["hook", "slowmo", "letterbox"].forEach((k) => (document.getElementById(k).onchange = (e) => { FORM[k] = e.target.checked; save(); }));
+  ["title", "subtitle", "place"].forEach((k) => (document.getElementById(k).oninput = (e) => { FORM[k] = e.target.value; save(); }));
+  document.getElementById("show_date").onchange = (e) => { FORM.show_date = e.target.checked; save(); };
+  ["hook", "slowmo", "letterbox", "smart_picks"].forEach((k) => (document.getElementById(k).onchange = (e) => { FORM[k] = e.target.checked; save(); }));
   document.getElementById("upload").onchange = async (e) => {
     const f = e.target.files[0];
     if (!f) return;
@@ -487,6 +495,7 @@ function clipCard(c) {
     <div class="frame">${picHtml(c)}${orientBadge(c)}</div>
     ${c.tags?.scene ? `<span class="tag">${esc(c.tags.scene)}</span>` : ""}
     <div class="tools">
+      <button data-star class="${c.starred ? "on" : ""}" title="${c.starred ? "Starred: always used in edits" : "Must use: always include this clip"}" aria-label="Must use">${c.starred ? "★" : "☆"}</button>
       <button data-rotate="-90" title="Rotate 90° left (fix a sideways clip)" aria-label="Rotate left">↺</button>
       <button data-rotate="90" title="Rotate 90° right (fix a sideways clip)" aria-label="Rotate right">↻</button>
       <button data-exclude="${c.excluded ? "0" : "1"}">${c.excluded ? "Use" : "Hide"}</button>
@@ -502,6 +511,12 @@ function clipCard(c) {
 function bindClips() {
   document.querySelectorAll(".clip").forEach((el) => {
     const cid = el.dataset.cid;
+    el.querySelector("[data-star]").onclick = async () => {
+      const c = PROJECT.clips[cid];
+      await api(`/api/projects/${PROJECT.id}/clips/${cid}`, { method: "PATCH", body: JSON.stringify({ starred: !c.starred }) });
+      await loadProject(PROJECT.id); route();
+      toast(!c.starred ? "Starred: this clip will always be in your edits." : "Unstarred.");
+    };
     el.querySelectorAll("[data-rotate]").forEach((b) => (b.onclick = async () => {
       el.querySelectorAll(".tools button").forEach((x) => (x.disabled = true));
       el.classList.add("busy");
@@ -535,10 +550,10 @@ function musicMap(e) {
   const secs = m.sections.map((t) => `<line x1="${X(t)}" x2="${X(t)}" y1="8" y2="56" class="mm-sec"/>`).join("");
   const drops = m.drops.map((t) => `<line x1="${X(t)}" x2="${X(t)}" y1="4" y2="56" class="mm-drop"/><text x="${+X(t) + 6}" y="20" class="mm-label">DROP</text>`).join("");
   const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
-  return `<div class="mm" title="Song energy with cuts (top ticks), bars (bottom ticks), section changes and the drop. Click to jump.">
+  return `<div class="mm" title="Song energy with cuts (top ticks), bars (bottom ticks), section changes, the drop and action moments (dots). Click to jump.">
     <svg viewBox="0 0 1000 60" preserveAspectRatio="none" data-mm data-dur="${D}">
       <path d="${area}" class="mm-area"/><polyline points="${pts.join(" ")}" class="mm-line"/>
-      ${bars}${secs}${cuts}${drops}<line x1="0" x2="0" y1="0" y2="60" class="mm-head" data-head/>
+      ${bars}${secs}${cuts}${drops}${e.plan.shots.filter((s) => s.action).map((s) => `<circle cx="${X(s.action.t)}" cy="30" r="5" class="mm-act"><title>action at ${s.action.t.toFixed(2)}s</title></circle>`).join("")}<line x1="0" x2="0" y1="0" y2="60" class="mm-head" data-head/>
     </svg>
     <div class="muted small">Using ${fmt(m.start)}–${fmt(m.end)} of the track${m.drops.length ? " · cuts build up into the drop" : ""}</div>
   </div>`;
@@ -564,6 +579,7 @@ function editCard(e) {
     <div class="edit-info">
       <div><b>${esc(look)}</b> · ${esc(platLabel(plan.platform))} · ${plan.duration.toFixed(1)}s · ${plan.shots.length} shots · ${plan.fps} fps</div>
       <div class="muted small">${e.music ? `♪ ${esc(e.music.path.split("/").pop())} · ${e.music.tempo} BPM` : "Natural sound"} · made ${fmtTime(e.created)}</div>
+      ${(e.notes || []).map((n) => `<div class="muted small warn">${esc(n)}</div>`).join("")}
       ${musicMap(e)}
       <div class="storyboard">${plan.shots.map((s, i) => `
         <div class="shot" data-seek="${s.timeline[0]}" title="${esc(s.name)} · ${esc(s.camera)}${s.speed < 1 ? ` · ${Math.round(1 / s.speed * 10) / 10}x slow-mo` : ""} · ${s.crop.why ? "reframe: " + s.crop.why : s.crop.mode}">
@@ -571,19 +587,52 @@ function editCard(e) {
           <img src="/media/${PROJECT.id}/renders/${e.id}/${e.thumbs[i] || ""}" alt="">
           <button class="x" data-drop="${s.clip_id}" title="Never use this clip here">✕</button>
           ${s.music?.drop ? `<span class="tr drop">drop</span>` : ""}
+          ${s.action ? `<span class="tr act" title="Cut so the action lands at ${s.action.t.toFixed(2)}s">action</span>` : ""}
+          ${s.starred ? `<span class="star" title="Starred clip">★</span>` : ""}
           <div class="t"><span>${s.timeline[0].toFixed(1)}s</span><span>${s.ramp ? "ramp" : s.speed < 1 ? "slo-mo" : ""}</span></div>
         </div>`).join("")}</div>
       <div class="row">
         ${e.final ? `<button class="btn primary small" data-reveal="${esc(e.final)}">Show in Finder</button>` : `<button class="btn primary small" data-final>Export full quality</button>`}
         <button class="btn small" data-again>Try another cut</button>
+        <button class="btn small" data-textpanel>Text &amp; caption</button>
         ${META.platforms[plan.platform]?.safe ? `<label class="check small"><input type="checkbox" data-safe> Show where ${esc(META.platforms[plan.platform].hidden ? "the app" : META.platforms[plan.platform].name)} covers the video</label>` : ""}
         <span class="spacer"></span>
         <button class="btn small ghost" data-del>Delete</button>
       </div>
       ${e.final ? `<div class="muted small">Saved to ${esc(e.final)}</div>` : ""}
+      ${textPanel(e)}
     </div>
   </div>`;
 }
+
+const OPEN_TEXT = new Set();
+function textPanel(e) {
+  const t = e.plan.text || {};
+  const notes = t.notes || {};
+  const rows = e.plan.shots.map((s, i) => {
+    const hint = PROJECT.clips[s.clip_id]?.tags?.caption;
+    return `<div class="note-row"><img src="/media/${PROJECT.id}/renders/${e.id}/${e.thumbs[i] || ""}" alt="">
+      <span class="muted small">${s.timeline[0].toFixed(1)}s</span>
+      <input type="text" data-note="${i}" maxlength="120" value="${esc(notes[i] || "")}" placeholder="${esc(hint ? `e.g. ${hint}` : "Note for this shot (optional)")}"></div>`;
+  }).join("");
+  const cap = e.post_caption;
+  return `<div class="textpanel" ${OPEN_TEXT.has(e.id) ? "" : "hidden"}>
+    <h3>Text on video</h3>
+    <div class="row"><input type="text" data-tplace placeholder="Place, e.g. Lisbon" value="${esc(t.place || "")}">
+      <label class="check small"><input type="checkbox" data-tdate ${t.show_date ? "checked" : ""}> Show the date</label></div>
+    <div class="notes">${rows}</div>
+    <div class="row"><button class="btn primary small" data-tapply>Update video</button>
+      <span class="muted small">Notes stay up at least 2 s and avoid the app's buttons and captions.</span></div>
+    <h3 style="margin-top:14px">Post caption</h3>
+    <div class="row"><button class="btn small" data-caption>${cap ? "Rewrite caption" : "Write post caption"}</button>
+      <span class="muted small" data-capnote>${cap ? esc(cap.note || (cap.source === "claude" ? "Written by Claude" : "Template caption")) : `For ${esc(platLabel(e.plan.platform))}. Uses Claude if your API key works, otherwise a template.`}</span></div>
+    <div data-capbox ${cap ? "" : "hidden"}>
+      <textarea data-captext rows="6">${esc(cap ? captionText(cap) : "")}</textarea>
+      <div class="row"><button class="btn small" data-copy>Copy</button><span class="muted small">Edit it freely before copying.</span></div>
+    </div>
+  </div>`;
+}
+const captionText = (c) => `${c.caption}\n\n${c.hashtags.map((h) => "#" + h).join(" ")}`;
 
 function bindEdits(g) {
   document.querySelectorAll(".edit").forEach((el) => {
@@ -611,6 +660,37 @@ function bindEdits(g) {
       const s = e.settings;
       startEdit(g.id, { ...s, exclude_clips: [...(s.exclude_clips || []), b.dataset.drop] });
     }));
+    const panel = el.querySelector(".textpanel");
+    el.querySelector("[data-textpanel]").onclick = () => {
+      panel.hidden = !panel.hidden;
+      panel.hidden ? OPEN_TEXT.delete(e.id) : OPEN_TEXT.add(e.id);
+    };
+    panel.querySelector("[data-tapply]").onclick = async () => {
+      const notes = {};
+      panel.querySelectorAll("[data-note]").forEach((inp) => { if (inp.value.trim()) notes[inp.dataset.note] = inp.value.trim(); });
+      const body = { place: panel.querySelector("[data-tplace]").value, show_date: panel.querySelector("[data-tdate]").checked, notes };
+      try {
+        trackJob(await post(`/api/projects/${PROJECT.id}/edits/${e.id}/text`, body));
+        viewGroup(g.id);
+      } catch (err) { toast(err.message); }
+    };
+    panel.querySelector("[data-caption]").onclick = async (ev) => {
+      const b = ev.currentTarget;
+      b.disabled = true; b.textContent = "Writing…";
+      try {
+        const c = await post(`/api/projects/${PROJECT.id}/edits/${e.id}/caption`, { use_ai: true });
+        e.post_caption = c;
+        panel.querySelector("[data-capbox]").hidden = false;
+        panel.querySelector("[data-captext]").value = captionText(c);
+        panel.querySelector("[data-capnote]").textContent = c.note || (c.source === "claude" ? "Written by Claude" : "Template caption");
+      } catch (err) { toast(err.message); }
+      b.disabled = false; b.textContent = "Rewrite caption";
+    };
+    panel.querySelector("[data-copy]").onclick = async () => {
+      const ta = panel.querySelector("[data-captext]");
+      try { await navigator.clipboard.writeText(ta.value); } catch { ta.select(); document.execCommand("copy"); }
+      toast("Caption copied. Paste it into your post.");
+    };
     el.querySelector("[data-again]").onclick = () => startEdit(g.id, { ...e.settings, seed: (e.settings.seed || 0) + 1 + Math.floor(Math.random() * 1000) });
     el.querySelector("[data-final]")?.addEventListener("click", async () => {
       trackJob(await post(`/api/projects/${PROJECT.id}/edits/${e.id}/final`));

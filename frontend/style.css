@@ -187,3 +187,16 @@ input[type=range] { accent-color: var(--accent); }
 .jobs-pill[hidden] + .update[hidden] + .ver { margin-left: auto; }
 .update:not([hidden]) + .ver, .jobs-pill:not([hidden]) ~ .ver { margin-left: 8px; }
 .ver.stale { color: var(--bad); border-color: #6b2d2d; }
+.textpanel { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 10px; }
+.textpanel[hidden] { display: none; }
+.textpanel input[type=text] { flex: 1; min-width: 160px; }
+.notes { display: grid; gap: 6px; max-height: 340px; overflow-y: auto; padding-right: 4px; }
+.note-row { display: grid; grid-template-columns: 34px 42px 1fr; gap: 8px; align-items: center; }
+.note-row img { width: 34px; height: 34px; object-fit: cover; border-radius: 5px; border: 1px solid var(--line); }
+.textpanel textarea { width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 10px; font: inherit; resize: vertical; }
+.clip .tools [data-star] { font-size: 13px; padding: 0 6px; }
+.clip .tools [data-star].on { color: #ffd166; }
+.shot .tr.act { top: auto; bottom: 18px; right: 3px; left: auto; background: #6fcf97; color: #0b1a10; }
+.shot .star { position: absolute; top: 3px; left: 4px; color: #ffd166; font-size: 13px; text-shadow: 0 1px 2px #000; }
+.mm-act { fill: #6fcf97; stroke: #0b1a10; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.warn { color: #f2c94c; }

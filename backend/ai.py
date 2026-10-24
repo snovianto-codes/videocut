@@ -35,6 +35,17 @@ class ThemeGroup(BaseModel):
     music_mood: str = Field(description="2-4 words, e.g. 'chill tropical house'")
 
 
+class MomentRating(BaseModel):
+    clip_id: str
+    interest: int = Field(description="0-10: how much this moment would add to a travel reel")
+    label: Literal["people", "food", "landmark", "scenery", "activity", "nightlife", "transit", "boring"]
+    why: str = Field(description="max 10 words")
+
+
+class MomentBatch(BaseModel):
+    clips: list[MomentRating]
+
+
 class ThemePlan(BaseModel):
     groups: list[ThemeGroup]
 
@@ -51,7 +62,7 @@ def _parse(client, content, schema, max_tokens=8000):
     try:
         return _call(client, content, schema, max_tokens)
     except anthropic.AuthenticationError:
-        raise RuntimeError("Claude rejected the API key. Start VideoCut with a valid ANTHROPIC_API_KEY to use theme grouping.")
+        raise RuntimeError("Claude rejected the API key. Start VideoCut with a valid ANTHROPIC_API_KEY to use Claude features.")
     except anthropic.RateLimitError:
         raise RuntimeError("Claude is rate-limiting right now. Try again in a minute.")
     except anthropic.APIConnectionError:
@@ -96,6 +107,34 @@ def tag_clips(clips: list[dict], sheet_for: Callable[[dict], Path], progress: Ca
             out[tag.clip_id] = tag.model_dump()
         if progress:
             progress((bi + 1) / len(batches), f"Tagged {min(len(clips), (bi + 1) * BATCH)}/{len(clips)} clips")
+    return out
+
+
+def rate_moments(clips: list[dict], strip_for: Callable[[dict], Path], progress=None) -> dict[str, dict]:
+    """Rate each clip's best moments (a 3-frame strip) for how meaningful they are, not how pretty."""
+    client = _client()
+    out: dict[str, dict] = {}
+    batches = [clips[i:i + BATCH] for i in range(0, len(clips), BATCH)]
+    for bi, batch in enumerate(batches):
+        content: list[dict] = []
+        for c in batch:
+            strip = strip_for(c)
+            if not strip or not strip.exists():
+                continue
+            content.append({"type": "text", "text": f"clip_id={c['id']}"})
+            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                         "data": base64.standard_b64encode(strip.read_bytes()).decode()}})
+        if not content:
+            continue
+        content.append({"type": "text", "text": (
+            "Each image shows three frames from the best-looking moments of one travel clip. Rate how much each clip "
+            "would add to a short travel reel: people having fun, food, landmarks, striking views and activities "
+            "score high; transit, walls, floors and nothing-happening shots score low. Judge meaning, not image quality. "
+            "Return one entry per clip_id.")})
+        for r in _parse(client, content, MomentBatch).clips:
+            out[r.clip_id] = {**r.model_dump(), "version": 1}
+        if progress:
+            progress((bi + 1) / len(batches), f"Claude rated {min(len(clips), (bi + 1) * BATCH)}/{len(clips)} clips")
     return out
 
 

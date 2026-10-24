@@ -202,41 +202,41 @@ LOOKS: dict[str, Look] = {
         contrast=0.28, saturation=0.92, vibrance=0.1, warmth=0.02,
         shadows=(-0.025, 0.012, 0.035), highlights=(0.035, 0.012, -0.03), lift=0.015,
         teal_greens=0.6, exposure_target=0.40, fps=24, vignette=0.35, grain=4, letterbox=True, punch=0.05,
-        pace=(2.2, 3.6), transitions={"cut": 0.75, "fade": 0.15, "fadeblack": 0.1},
+        pace=(2.2, 3.6), transitions={"cut": 0.72, "dissolve": 0.12, "dip": 0.08, "whip": 0.08},
     ),
     "vibrant": Look(
         "vibrant", "Travel Vibes", "Punchy colour, bright and warm, fast beat-driven cuts with whip transitions.",
         contrast=0.18, saturation=1.18, vibrance=0.35, warmth=0.03, exposure_target=0.46,
-        fps=30, pace=(1.0, 1.8), transitions={"cut": 0.7, "smoothleft": 0.15, "hblur": 0.15}, slowmo=False,
+        fps=30, pace=(1.0, 1.8), transitions={"cut": 0.6, "whip": 0.2, "zoom": 0.1, "flash": 0.1}, slowmo=False,
         punch=0.14, flash=True, energetic=True,
     ),
     "moody": Look(
         "moody", "Moody", "Darker, desaturated, cool shadows and faded blacks. Great for cities, rain and mountains.",
         contrast=0.22, saturation=0.72, shadows=(-0.02, 0.0, 0.03), highlights=(0.01, 0.005, -0.01),
         lift=0.045, gain=0.95, teal_greens=0.4, exposure_target=0.34, fps=24, vignette=0.5, grain=5,
-        pace=(2.4, 3.8), transitions={"cut": 0.6, "fade": 0.4}, punch=0.0,
+        pace=(2.4, 3.8), transitions={"cut": 0.6, "dissolve": 0.25, "dip": 0.15}, punch=0.0,
     ),
     "film": Look(
         "film", "Vintage Film", "Warm faded film stock with grain and a soft glow.",
         contrast=0.12, saturation=0.85, warmth=0.06, shadows=(0.01, 0.01, 0.03), highlights=(0.03, 0.015, -0.02),
         lift=0.07, gain=0.96, exposure_target=0.44, fps=24, vignette=0.4, grain=9, glow=0.18,
-        pace=(2.0, 3.0), transitions={"cut": 0.6, "fade": 0.4},
+        pace=(2.0, 3.0), transitions={"cut": 0.55, "leak": 0.3, "dissolve": 0.15},
     ),
     "golden": Look(
         "golden", "Golden Hour", "Sun-kissed warm tones with dreamy glow. Beaches and sunsets.",
         contrast=0.14, saturation=1.05, vibrance=0.15, warmth=0.09, highlights=(0.04, 0.02, -0.03),
         lift=0.02, exposure_target=0.45, fps=24, vignette=0.25, glow=0.25,
-        pace=(2.0, 3.2), transitions={"cut": 0.6, "fade": 0.4},
+        pace=(2.0, 3.2), transitions={"cut": 0.55, "leak": 0.3, "dissolve": 0.15},
     ),
     "clean": Look(
         "clean", "Natural", "True-to-life colour with a gentle contrast lift.",
-        contrast=0.08, saturation=1.04, vibrance=0.1, fps=30, pace=(1.8, 2.8), transitions={"cut": 0.85, "fade": 0.15},
+        contrast=0.08, saturation=1.04, vibrance=0.1, fps=30, pace=(1.8, 2.8), transitions={"cut": 0.85, "dissolve": 0.15},
         punch=0.08,
     ),
     "noir": Look(
         "noir", "Black & White", "High-contrast monochrome with film grain.",
         contrast=0.35, mono=True, lift=0.01, exposure_target=0.40, fps=24, vignette=0.45, grain=8,
-        pace=(2.2, 3.4), transitions={"cut": 0.7, "fadeblack": 0.3},
+        pace=(2.2, 3.4), transitions={"cut": 0.7, "graydip": 0.15, "dip": 0.15},
     ),
 }
 
