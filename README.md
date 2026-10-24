@@ -13,6 +13,7 @@ grades log footage, and reframes everything for Reels, TikTok, Shorts or YouTube
 ![ffmpeg](https://img.shields.io/badge/ffmpeg-7%2B-007808?logo=ffmpeg&logoColor=white)
 ![OpenCV](https://img.shields.io/badge/OpenCV-analysis-5C3EE8?logo=opencv&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
 ![VideoCut app](docs/app.jpg)
 
@@ -34,6 +35,7 @@ grades log footage, and reframes everything for Reels, TikTok, Shorts or YouTube
 - [Project layout](#project-layout)
 - [Development](#development)
 - [Limitations and roadmap](#limitations-and-roadmap)
+- [License](#license)
 
 ## Highlights
 
@@ -208,6 +210,10 @@ The suite covers grouping, log transfer functions, gamut math, looks, shot plann
 - [ ] Per-frame subject tracking for vertical reframes
 - [ ] Music ducking under speech, transition sound effects
 - [ ] Map route animations from GPS
+
+## License
+
+[MIT](LICENSE). Use it, change it and share it; keep the license notice.
 
 ## Acknowledgements
 
