@@ -1,0 +1,11 @@
+anthropic==2.3.0
+fastapi==0.162.0
+librosa==1.0.0
+numpy==2.5.4
+opencv-python-headless==4.14.0.94
+pillow==13.0.0
+pydantic==2.14.1
+pytest==9.1.1
+python-multipart==0.0.32
+soundfile==0.14.0
+uvicorn==0.54.0
